@@ -9,8 +9,48 @@ const chalk = require('chalk');
 const ai = require('./ai');
 const settings = require('./default_settings.json');
 
+// --- Setup Error Logging ---
+const originalConsoleError = console.error;
+console.error = function (...args) {
+    // 1. Log to the terminal as usual
+    originalConsoleError.apply(console, args);
+
+    try {
+        // 2. Ensure logs directory exists
+        const logsDir = path.join(__dirname, 'logs');
+        if (!fs.existsSync(logsDir)) {
+            fs.mkdirSync(logsDir);
+        }
+
+        // 3. Create a daily rotating log file name (error_YYYY-MM-DD.log)
+        const dateStr = new Date().toISOString().split('T')[0];
+        const logFile = path.join(logsDir, `error_${dateStr}.log`);
+        
+        // 4. Format the error message
+        const timestamp = new Date().toISOString();
+        // Remove ANSI escape codes (colors) from the logged string
+        const stripAnsi = (str) => str.replace(/\x1B\[\d+m/g, '');
+        
+        const logMsg = `[${timestamp}] ` + args.map(arg => {
+            if (arg instanceof Error) return stripAnsi(arg.stack || arg.toString());
+            if (typeof arg === 'object') return stripAnsi(JSON.stringify(arg));
+            return stripAnsi(String(arg));
+        }).join(' ') + '\n';
+
+        // 5. Append to the daily log file
+        fs.appendFileSync(logFile, logMsg);
+    } catch (e) {
+        // Fallback if writing to log file fails
+        originalConsoleError("Failed to write to log file:", e);
+    }
+};
+// ---------------------------
+
 // Store active chat sessions and their timeout handles
 const activeChats = {};
+
+// Store chats that have requested a 24h keepalive
+const keepAliveChats = new Set();
 
 // Store last messages for chat clearing
 const lastMessages = {};
@@ -183,7 +223,21 @@ async function connectToWhatsApp() {
 
             const userPhone = jid.split('@')[0];
             await sock.sendMessage(myJid, { text: `${userPhone} request to use your bot here is the OTP : ${formattedOtp}` });
-            await sock.sendMessage(jid, { text: "An OTP has been sent to the owner. Please enter it here (e.g. 123-456)." });
+            
+            const verifyText = `*Welcome to Gamma BOT!* 🤖\n\n` +
+                               `An OTP has been sent to the owner. Please enter it here (e.g. 123-456) to verify your account.`;
+            const imagePath = path.join(__dirname, 'Assets', 'alive.jpg');
+            
+            try {
+                if (fs.existsSync(imagePath)) {
+                    await sock.sendMessage(jid, { image: { url: imagePath }, caption: verifyText });
+                } else {
+                    await sock.sendMessage(jid, { text: verifyText });
+                }
+            } catch (e) {
+                console.error(chalk.red("Error sending verify message"), e);
+                await sock.sendMessage(jid, { text: verifyText });
+            }
             return;
         }
 
@@ -230,10 +284,18 @@ async function connectToWhatsApp() {
             return;
         }
 
+        if(command.toLowerCase() === '!keepalive') {
+            keepAliveChats.add(jid);
+            startChatSession(sock, jid);
+            await sock.sendMessage(jid, { text: "🕒 Session is now kept alive for 24 hours. I will not go to sleep automatically. Type !end to manually terminate the session." });
+            return;
+        }
+
         if(command.toLowerCase() === '!end') {
             if (activeChats[jid]) {
                 clearTimeout(activeChats[jid]);
                 delete activeChats[jid];
+                keepAliveChats.delete(jid);
                 await sock.sendMessage(jid, { text: settings.messages.ended });
                 await clearChat(sock, jid);
             }
@@ -290,16 +352,20 @@ function startChatSession(sock, jid) {
         clearTimeout(activeChats[jid]);
     }
     
+    // 24 hours if keepalive is active, else default 5 mins
+    const timeoutDuration = keepAliveChats.has(jid) ? 86400000 : settings.bot.inactivity_timeout_ms;
+
     // Set inactivity timeout
     activeChats[jid] = setTimeout(async () => {
         delete activeChats[jid];
+        keepAliveChats.delete(jid);
         try {
             await sock.sendMessage(jid, { text: settings.messages.timeout });
             await clearChat(sock, jid);
         } catch (e) {
             console.error(chalk.red("Failed to send timeout message to"), jid);
         }
-    }, settings.bot.inactivity_timeout_ms); // 5 minutes by default
+    }, timeoutDuration); 
 }
 
 async function sendAliveMessage(sock, jid, isVerified = false) {

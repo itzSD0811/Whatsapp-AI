@@ -3,3 +3,4 @@ auth_info_baileys/
 .env
 whitelist.json
 .DS_Store
+logs/

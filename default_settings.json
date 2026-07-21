@@ -1,10 +1,26 @@
 {
   "ai": {
-    "model": "google/diffusiongemma-26b-a4b-it",
-    "max_tokens": 4096,
-    "temperature": 1,
-    "top_p": 1,
-    "invoke_url": "https://integrate.api.nvidia.com/v1/chat/completions"
+    "llm_provider": "OPENROUTER",
+    "nvidia": {
+      "invoke_url": "https://integrate.api.nvidia.com/v1/chat/completions",
+      "models": [
+        "google/diffusiongemma-26b-a4b-it",
+        "meta/llama3-70b-instruct"
+      ],
+      "max_tokens": 4096,
+      "temperature": 1,
+      "top_p": 1
+    },
+    "openrouter": {
+      "invoke_url": "https://openrouter.ai/api/v1/chat/completions",
+      "models": [
+        "google/gemma-4-26b-a4b-it:free",
+        "meta-llama/llama-3-8b-instruct:free"
+      ],
+      "max_tokens": 4096,
+      "temperature": 1,
+      "top_p": 1
+    }
   },
   "bot": {
     "inactivity_timeout_ms": 300000,

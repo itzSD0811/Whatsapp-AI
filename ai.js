@@ -12,14 +12,21 @@ try {
     console.error('Could not read system_prompt.txt', error);
 }
 
-// Ensure API key is set
-const API_KEY = process.env.NVIDIA_API_KEY;
-if (!API_KEY) {
-    console.warn("WARNING: NVIDIA_API_KEY is not set in .env!");
-}
-
 async function getChatCompletion(userMessage, imageInfo = null, conversationHistory = []) {
-    const invoke_url = settings.ai.invoke_url;
+    const provider = settings.ai.llm_provider || 'NVIDIA';
+    let apiKey, invoke_url, aiSettings;
+
+    if (provider.toUpperCase() === 'OPENROUTER') {
+        apiKey = process.env.OPENROUTER_API_KEY;
+        aiSettings = settings.ai.openrouter;
+        if (!apiKey) console.warn("WARNING: OPENROUTER_API_KEY is not set in .env!");
+    } else {
+        apiKey = process.env.NVIDIA_API_KEY;
+        aiSettings = settings.ai.nvidia;
+        if (!apiKey) console.warn("WARNING: NVIDIA_API_KEY is not set in .env!");
+    }
+
+    invoke_url = aiSettings.invoke_url;
     
     // Construct the messages array
     const messages = [];
@@ -46,29 +53,53 @@ async function getChatCompletion(userMessage, imageInfo = null, conversationHist
 
     messages.push({ role: "user", content: userContent });
 
-    const payload = {
+    const payloadTemplate = {
         messages: messages,
-        model: settings.ai.model,
-        chat_template_kwargs: {
-            enable_thinking: true
-        },
-        max_tokens: settings.ai.max_tokens,
+        max_tokens: aiSettings.max_tokens,
         stream: false, // We use false for simpler handling in WhatsApp
-        temperature: settings.ai.temperature,
-        top_p: settings.ai.top_p
+        temperature: aiSettings.temperature,
+        top_p: aiSettings.top_p
     };
 
+    // NVIDIA requires chat_template_kwargs for thinking
+    if (provider.toUpperCase() === 'NVIDIA') {
+        payloadTemplate.chat_template_kwargs = {
+            enable_thinking: true
+        };
+    }
+
     const headers = {
-        "Authorization": `Bearer ${API_KEY}`,
+        "Authorization": `Bearer ${apiKey}`,
         "Accept": "application/json",
         "Content-Type": "application/json"
     };
 
+    // OpenRouter specific headers (optional but good for rankings)
+    if (provider.toUpperCase() === 'OPENROUTER') {
+        headers["HTTP-Referer"] = "https://github.com/SethruDineth/GammaBot";
+        headers["X-Title"] = "Gamma BOT WhatsApp";
+    }
+
     try {
-        const response = await axios.post(invoke_url, payload, { headers });
-        return response.data.choices[0].message.content;
+        // Support both "models" (array) and "model" (string) for backward compatibility
+        const modelsList = aiSettings.models || [aiSettings.model];
+        
+        // Fire off all requests simultaneously
+        const promises = modelsList.map(modelName => {
+            const payload = { ...payloadTemplate, model: modelName };
+            return axios.post(invoke_url, payload, { headers })
+                .then(response => response.data.choices[0].message.content);
+        });
+
+        // Return the first successful response instantly
+        return await Promise.any(promises);
     } catch (error) {
-        console.error("Error connecting to NVIDIA API:", error.response ? error.response.data : error.message);
+        // If ALL requests fail, Promise.any throws an AggregateError
+        if (error.name === 'AggregateError') {
+            console.error(`All models failed for ${provider} API. Errors:`, error.errors.map(e => e.response ? e.response.data : e.message));
+        } else {
+            console.error(`Error connecting to ${provider} API:`, error.response ? error.response.data : error.message);
+        }
         throw error;
     }
 }
