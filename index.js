@@ -49,6 +49,9 @@ console.error = function (...args) {
 // Store active chat sessions and their timeout handles
 const activeChats = {};
 
+// Store conversational memory (context) for active chats
+const chatHistory = {};
+
 // Store chats that have requested a 24h keepalive
 const keepAliveChats = new Set();
 
@@ -279,33 +282,41 @@ async function connectToWhatsApp() {
         // --- Only Verified Users Reach Here ---
 
         if(command.toLowerCase() === '!start') {
+            if (!settings.bot.enable_start_command) return;
+            chatHistory[jid] = []; // Reset memory on new session
             startChatSession(sock, jid);
             await sock.sendMessage(jid, { text: settings.messages.started });
             return;
         }
 
         if(command.toLowerCase() === '!keepalive') {
+            if (!settings.bot.enable_start_command) return;
             keepAliveChats.add(jid);
+            chatHistory[jid] = []; // Reset memory on new keepalive session
             startChatSession(sock, jid);
             await sock.sendMessage(jid, { text: "🕒 Session is now kept alive for 24 hours. I will not go to sleep automatically. Type !end to manually terminate the session." });
             return;
         }
 
         if(command.toLowerCase() === '!end') {
+            if (!settings.bot.enable_start_command) return;
             if (activeChats[jid]) {
                 clearTimeout(activeChats[jid]);
                 delete activeChats[jid];
                 keepAliveChats.delete(jid);
+                delete chatHistory[jid]; // Clear memory
                 await sock.sendMessage(jid, { text: settings.messages.ended });
                 await clearChat(sock, jid);
             }
             return;
         }
 
-        // If it's an active chat, process with AI
-        if (activeChats[jid]) {
-            // Reset the timeout timer
-            startChatSession(sock, jid);
+        // If it's an active chat OR start command is disabled, process with AI
+        if (activeChats[jid] || !settings.bot.enable_start_command) {
+            // Only manage timeout timers if start command is enabled
+            if (settings.bot.enable_start_command) {
+                startChatSession(sock, jid);
+            }
             
             // Show typing indicator
             await sock.sendPresenceUpdate('composing', jid);
@@ -332,8 +343,21 @@ async function connectToWhatsApp() {
                     }
                 }
 
-                const aiResponse = await ai.getChatCompletion(command, imageInfo);
+                // Fetch history
+                let history = chatHistory[jid] || [];
+
+                const aiResponse = await ai.getChatCompletion(command, imageInfo, history);
                 
+                // Update history
+                if (!chatHistory[jid]) chatHistory[jid] = [];
+                chatHistory[jid].push({ role: "user", content: command || "Sent an image." });
+                chatHistory[jid].push({ role: "assistant", content: aiResponse });
+                
+                // Limit to last 20 messages (10 interactions)
+                if (chatHistory[jid].length > 20) {
+                    chatHistory[jid] = chatHistory[jid].slice(chatHistory[jid].length - 20);
+                }
+
                 // Add signature
                 const fullMessage = aiResponse + settings.credits.signature;
                 
@@ -359,6 +383,7 @@ function startChatSession(sock, jid) {
     activeChats[jid] = setTimeout(async () => {
         delete activeChats[jid];
         keepAliveChats.delete(jid);
+        delete chatHistory[jid]; // Clear memory on timeout
         try {
             await sock.sendMessage(jid, { text: settings.messages.timeout });
             await clearChat(sock, jid);

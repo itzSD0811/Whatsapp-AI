@@ -20,9 +20,19 @@
       "max_tokens": 4096,
       "temperature": 1,
       "top_p": 1
+    },
+    "google": {
+      "invoke_url": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+      "models": [
+        "gemini-1.5-flash"
+      ],
+      "max_tokens": 4096,
+      "temperature": 1,
+      "top_p": 1
     }
   },
   "bot": {
+    "enable_start_command": true,
     "inactivity_timeout_ms": 300000,
     "max_message_length": 4000,
     "auto_delete_chat": true

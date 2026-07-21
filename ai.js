@@ -14,16 +14,25 @@ try {
 
 async function getChatCompletion(userMessage, imageInfo = null, conversationHistory = []) {
     const provider = settings.ai.llm_provider || 'NVIDIA';
-    let apiKey, invoke_url, aiSettings;
+    let invoke_url, aiSettings;
+
+    // Load available keys (Primary + Backups)
+    const availableKeys = [
+        process.env[`${provider.toUpperCase()}_API_KEY`],
+        process.env[`${provider.toUpperCase()}_API_KEY_B1`],
+        process.env[`${provider.toUpperCase()}_API_KEY_B2`]
+    ].filter(Boolean); // removes undefined/empty
+
+    if (availableKeys.length === 0) {
+        console.warn(`WARNING: No API keys found for ${provider} in .env!`);
+    }
 
     if (provider.toUpperCase() === 'OPENROUTER') {
-        apiKey = process.env.OPENROUTER_API_KEY;
         aiSettings = settings.ai.openrouter;
-        if (!apiKey) console.warn("WARNING: OPENROUTER_API_KEY is not set in .env!");
+    } else if (provider.toUpperCase() === 'GOOGLE') {
+        aiSettings = settings.ai.google;
     } else {
-        apiKey = process.env.NVIDIA_API_KEY;
         aiSettings = settings.ai.nvidia;
-        if (!apiKey) console.warn("WARNING: NVIDIA_API_KEY is not set in .env!");
     }
 
     invoke_url = aiSettings.invoke_url;
@@ -68,16 +77,16 @@ async function getChatCompletion(userMessage, imageInfo = null, conversationHist
         };
     }
 
-    const headers = {
-        "Authorization": `Bearer ${apiKey}`,
+    // Base headers without authorization (auth added dynamically)
+    const baseHeaders = {
         "Accept": "application/json",
         "Content-Type": "application/json"
     };
 
     // OpenRouter specific headers (optional but good for rankings)
     if (provider.toUpperCase() === 'OPENROUTER') {
-        headers["HTTP-Referer"] = "https://github.com/SethruDineth/GammaBot";
-        headers["X-Title"] = "Gamma BOT WhatsApp";
+        baseHeaders["HTTP-Referer"] = "https://github.com/SethruDineth/GammaBot";
+        baseHeaders["X-Title"] = "Gamma BOT WhatsApp";
     }
 
     try {
@@ -85,10 +94,28 @@ async function getChatCompletion(userMessage, imageInfo = null, conversationHist
         const modelsList = aiSettings.models || [aiSettings.model];
         
         // Fire off all requests simultaneously
-        const promises = modelsList.map(modelName => {
+        const promises = modelsList.map(async (modelName) => {
             const payload = { ...payloadTemplate, model: modelName };
-            return axios.post(invoke_url, payload, { headers })
-                .then(response => response.data.choices[0].message.content);
+            
+            // Try each available key in sequence until one succeeds
+            for (let i = 0; i < availableKeys.length; i++) {
+                try {
+                    const headers = { ...baseHeaders, "Authorization": `Bearer ${availableKeys[i]}` };
+                    const response = await axios.post(invoke_url, payload, { headers });
+                    return response.data.choices[0].message.content;
+                } catch (error) {
+                    const status = error.response ? error.response.status : null;
+                    
+                    // If rate limited (429) and we have more backup keys to try
+                    if (status === 429 && i < availableKeys.length - 1) {
+                        console.error(`[Rate Limit 429] Key ${i+1} failed for ${provider} model ${modelName}. Switching to backup key...`);
+                        continue; // try the next key in the loop
+                    }
+                    
+                    // If not a rate limit, or we are completely out of backup keys, throw the error
+                    throw error;
+                }
+            }
         });
 
         // Return the first successful response instantly
