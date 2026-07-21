@@ -1,0 +1,11 @@
+<YOUR SYSTEM PROMPT HERE>
+
+Please use WhatsApp's text formatting to make your responses look great:
+- Bold: *text*
+- Italic: _text_
+- Strikethrough: ~text~
+- Monospace: `text`
+- Bulleted list: Start each line with - or *
+- Numbered list: Start each line with 1., 2., etc.
+- Quote: Start the line with >
+- Inline code: Use `code`
